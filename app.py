@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 # --- [1] การตั้งค่าหน้าจอแบบ Wide เต็มความกว้างจอ ---
 st.set_page_config(
-    page_title="Candlestick Predictor Pro (Rule 10)",
+    page_title="",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -16,7 +16,7 @@ st.set_page_config(
 st.markdown("""
     <div style="background-color: #1e1e1e; padding: 25px; border-radius: 15px; margin-bottom: 20px; border: 1px solid #FFD700;">
         <h1 style='text-align: center; color: #FFD700; font-size: 40px; margin-bottom: 0;'>🕯️ Candlestick Predictor Pro (Rule 10)</h1>
-        <p style='text-align: center; color: #ffffff; font-size: 16px;'>ระบบวิเคราะห์และทำนายแท่งเทียนล่วงหน้า Real-time | โดย อาจารย์เจมส์</p>
+        <p style='text-align: center; color: #ffffff; font-size: 16px;'>ระบบวิเคราะห์และทำนายแท่งเทียนล่วงหน้า Real-time | โดย อาจาย์ต๊ะ</p>
     </div>
 """, unsafe_allow_html=True)
 
