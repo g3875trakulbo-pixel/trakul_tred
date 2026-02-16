@@ -15,7 +15,7 @@ st.markdown("""
             <span style="font-size: 20px;">👤</span>
         </div>
         <div>
-            <h2 style='color: #FFD700; margin: 0;'>แอปทำนาย Predictor Pro (Rule 10)</h2>
+            <h2 style='color: #FFD700; margin: 0;'>แอปทำนาย Predictor Pro (สูตรลับตระกูลบุญชิต)</h2>
             <p style='color: #888; margin: 0; font-size: 14px;'>โดย: ตระกูลบุญชิต | วิเคราะห์เทคนิคอล Real-time</p>
         </div>
     </div>
@@ -36,7 +36,6 @@ symbol = st.session_state.selected_symbol
 # --- ฟังก์ชันดึงข้อมูลแบบป้องกันการโดนบล็อก ---
 @st.cache_data(ttl=30)
 def get_crypto_data(symbol):
-    # ลองดึงจาก Binance ก่อน ถ้าไม่ได้ให้สลับไป KuCoin หรือ Kraken อัตโนมัติ
     exchanges = [
         ccxt.binance({'enableRateLimit': True}),
         ccxt.kucoin({'enableRateLimit': True}),
@@ -64,26 +63,48 @@ try:
         fig_market.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig_market, use_container_width=True)
 
-        # วิเคราะห์ Rule 10
-        df['RSI'] = ta.rsi(df['close'], length=14)
+        # --- ส่วนการวิเคราะห์ใหม่: กฎ 4 ข้อ (MACD Histogram) ---
         macd = ta.macd(df['close'])
         df = pd.concat([df, macd], axis=1)
-        last = df.iloc[-1]
         
-        score = 0
-        if last['close'] > last['open']: score += 1
-        if last['RSI'] < 45: score += 2
-        if last['MACD_12_26_9'] > last['MACDs_12_26_9']: score += 2
+        # ชื่อคอลัมน์ Histogram ปกติของ pandas_ta คือ MACDh_12_26_9
+        hist_col = 'MACDh_12_26_9'
+        last_hist = df[hist_col].iloc[-1]
+        prev_hist = df[hist_col].iloc[-2]
+        
+        verdict = ""
+        v_color = ""
+        rule_name = ""
 
-        # พยากรณ์
+        # 1. เขียวใส (Histogram > 0 และ สูงขึ้น) -> ขึ้นจริง
+        if last_hist > 0 and last_hist > prev_hist:
+            rule_name = "เขียวใส (Momentum เพิ่ม)"
+            verdict, v_color = "ขึ้นจริง (BULLISH)", "#00FF00"
+
+        # 2. เขียวทึบ (Histogram > 0 แต่ ลดลง) -> ลงจริง
+        elif last_hist > 0 and last_hist <= prev_hist:
+            rule_name = "เขียวทึบ (Momentum แผ่ว)"
+            verdict, v_color = "ลงจริง (BEARISH)", "#006400"
+
+        # 3. แดงใส (Histogram < 0 และ ต่ำลง) -> ลง
+        elif last_hist < 0 and last_hist < prev_hist:
+            rule_name = "แดงใส (แรงขายเพิ่ม)"
+            verdict, v_color = "ลง (BEARISH)", "#FF0000"
+
+        # 4. แดงทึบ (Histogram < 0 แต่ สูงขึ้น) -> ขึ้นจริง
+        elif last_hist < 0 and last_hist >= prev_hist:
+            rule_name = "แดงทึบ (แรงขายแผ่ว)"
+            verdict, v_color = "ขึ้นจริง (BULLISH)", "#8B0000"
+
+        # พยากรณ์ (จำลองราคาเป้าหมาย)
         st.divider()
-        next_time = last['timestamp'] + timedelta(hours=1)
-        if score >= 3:
-            p_open, p_close = last['close'], last['close'] * 1.01
-            verdict, v_color = "ขึ้น (BULLISH)", "#00FF00"
+        last_price = df['close'].iloc[-1]
+        next_time = df['timestamp'].iloc[-1] + timedelta(hours=1)
+        
+        if "ขึ้นจริง" in verdict:
+            p_open, p_close = last_price, last_price * 1.01
         else:
-            p_open, p_close = last['close'], last['close'] * 0.99
-            verdict, v_color = "ลง (BEARISH)", "#FF4B4B"
+            p_open, p_close = last_price, last_price * 0.99
 
         fig_predict = go.Figure(data=[
             go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="จริง"),
@@ -96,6 +117,7 @@ try:
         # แถบผลลัพธ์
         st.markdown(f"""
             <div style="background-color: #1a1a1a; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid {v_color};">
+                <p style='color: #888; margin:0;'>กฎที่ตรวจพบ: {rule_name}</p>
                 <h2 style='color:{v_color}; margin:0;'>ทำนาย: {verdict}</h2>
                 <div style="display: flex; justify-content: center; gap: 20px; margin-top:15px;">
                     <div style="background-color: #28a745; color: white; padding: 10px 30px; border-radius: 15px; font-weight: bold;">เข้าซื้อ: {p_open:.4f}</div>
