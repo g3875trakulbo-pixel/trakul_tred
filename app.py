@@ -1,119 +1,131 @@
 import streamlit as st
 import pandas as pd
-import re, os
+import re
 from io import BytesIO
 
-# --- 1. การตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="ระบบครูตระกูล v9.8.3", layout="wide")
+# --- 1. การตั้งค่าหน้าจอและสไตล์ ---
+st.set_page_config(page_title="ระบบครูตระกูล v9.9.0", layout="wide")
 
-# --- 2. ฟังก์ชันประมวลผล (จุดที่แก้ไขเรื่องชื่อซ้ำ) ---
+def inject_custom_css():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
+        html, body, [class*="css"] { font-family: 'Sarabun', sans-serif; }
+        .main-header { background: linear-gradient(90deg, #0d47a1, #1976d2); padding: 20px; border-radius: 15px; text-align: center; color: white; margin-bottom: 25px; }
+        .room-section { background-color: #f8f9fa; border-left: 8px solid #1565c0; padding: 15px; margin: 20px 0; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    </style>
+    """, unsafe_allow_html=True)
 
+# --- 2. ฟังก์ชันหัวใจสำคัญ: การฟอกชื่อ (Name Scrubbing) ---
+def normalize_name(text):
+    """ทำให้ชื่อสะอาดที่สุดเพื่อใช้ในการจับคู่ (Match)"""
+    if not text or pd.isna(text): return ""
+    # 1. แปลงเป็นตัวพิมพ์เล็ก (ถ้ามีภาษาอังกฤษ) และลบช่องว่างทั้งหมด
+    t = str(text).lower().replace(" ", "").replace("\xa0", "")
+    # 2. ลบคำนำหน้าชื่อทุกรูปแบบ
+    prefixes = r'(เด็กชาย|เด็กหญิง|นาย|นางสาว|ด\.ช\.|ด\.ญ\.|น\.ส\.|นาง|ชื่อ|นามสกุล|:|：)'
+    t = re.sub(prefixes, '', t)
+    # 3. ลบอักขระพิเศษและจุด
+    t = re.sub(r'[\.\-\_\(\)]', '', t)
+    return t
+
+# --- 3. การจัดการข้อมูล Master (รายชื่อที่ถูกต้อง) ---
 def process_master_files(files):
-    levels_db = {}
+    all_students = []
     for f in files:
-        name = f.name.replace('.xlsx', '').replace('.csv', '')
-        level_match = re.search(r'(ม\.\d+)', name)
-        level = level_match.group(1) if level_match else "ระดับอื่นๆ"
-        
-        df = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
-        c_sid = next((c for c in df.columns if "เลขที่" in str(c)), None)
-        c_name = next((c for c in df.columns if any(k in str(c) for k in ["ชื่อ", "นามสกุล"])), None)
-        
-        if c_sid and c_name:
-            df_clean = df[[c_sid, c_name]].copy()
-            df_clean[c_sid] = pd.to_numeric(df_clean[c_sid], errors='coerce')
-            df_clean = df_clean.dropna(subset=[c_sid])
-            df_clean[c_sid] = df_clean[c_sid].astype(int)
-            df_clean.columns = ['เลขที่', 'ชื่อ - นามสกุล']
+        try:
+            df = pd.read_excel(f) if f.name.endswith(('.xlsx', '.xls')) else pd.read_csv(f, encoding='utf-8-sig')
+            # ค้นหาคอลัมน์ เลขที่ และ ชื่อ
+            c_sid = next((c for c in df.columns if "เลขที่" in str(c)), None)
+            c_name = next((c for c in df.columns if any(k in str(c) for k in ["ชื่อ", "นามสกุล"])), None)
             
-            # ✅ ลบรายชื่อซ้ำในไฟล์ต้นฉบับ
-            df_clean = df_clean.drop_duplicates(subset=['เลขที่'], keep='first')
-            
-            if level not in levels_db: levels_db[level] = {}
-            levels_db[level][name] = df_clean
-    return levels_db
-
-def process_padlet_files(files):
-    all_data = []
-    for f in files:
-        df = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
-        # หาคอลัมน์ห้อง
-        col_sec = next((c for c in df.columns if any(k in str(c).lower() for k in ["ส่วน", "section", "ห้อง"])), None)
-        
-        for _, row in df.iterrows():
-            content_str = " ".join(map(str, row.values))
-            sid_match = re.search(r'(?:เลขที่|No\.|#|n)\s*(\d+)', content_str, re.I)
-            act_match = re.search(r'1\.(\d{1,2})', content_str)
-            
-            if sid_match and act_match:
-                # ดึงเลขห้องออกมาเป็นตัวเลขล้วน (เช่น "ม.3/1" -> "31") เพื่อใช้เช็คเบื้องต้น
-                raw_room = str(row[col_sec]) if col_sec else ""
-                room_digits = "".join(re.findall(r'\d+', raw_room))
+            if c_name:
+                # ดึงข้อมูลระดับชั้นและห้องจากชื่อไฟล์
+                room_info = f.name.replace('.xlsx', '').replace('.csv', '')
                 
-                all_data.append({
-                    'เลขที่': int(sid_match.group(1)),
-                    'กิจกรรม': f"1.{act_match.group(1)}",
-                    'รหัสห้อง': room_digits  # ใช้แค่ตัวเลขเพื่อความแม่นยำในการ Group
-                })
+                for _, row in df.iterrows():
+                    raw_name = str(row[c_name])
+                    all_students.append({
+                        'key': normalize_name(raw_name), # ชื่อที่ฟอกแล้วใช้เป็น Key
+                        'display_name': raw_name.strip(),
+                        'no': row[c_sid] if c_sid else "-",
+                        'room': room_info
+                    })
+        except: continue
     
-    if not all_data: return pd.DataFrame()
-    
-    df_raw = pd.DataFrame(all_data)
-    
-    # ✅ แก้ไขจุดนี้: ยุบรวมข้อมูลโดยไม่สนว่าเด็กจะพิมพ์ห้องมาต่างกันกี่แบบ
-    # ถ้าเลขที่เดียวกัน กิจกรรมเดียวกัน อยู่ในรหัสห้องเดียวกัน ให้ยุบเหลือบรรทัดเดียว
-    pivot = df_raw.pivot_table(
-        index=['เลขที่', 'รหัสห้อง'],
-        columns='กิจกรรม',
-        aggfunc='max', 
-        fill_value=0
-    ).reset_index()
-    
-    return pivot
+    # กำจัดชื่อซ้ำใน Master (ถ้ามีคนชื่อซ้ำกันในรายชื่อห้อง)
+    return pd.DataFrame(all_students).drop_duplicates(subset=['key'], keep='first')
 
-# --- 3. ส่วนแสดงผล ---
+# --- 4. การจัดการข้อมูลงาน (Padlet) ---
+def process_padlet_works(files):
+    works = []
+    for f in files:
+        try:
+            df = pd.read_excel(f) if f.name.endswith(('.xlsx', '.xls')) else pd.read_csv(f, encoding='utf-8-sig')
+            for _, row in df.iterrows():
+                # รวมข้อมูลทุกช่องในแถวนั้นเป็นข้อความเดียวเพื่อค้นหาชื่อและกิจกรรม
+                content = " ".join(map(str, row.values))
+                # ค้นหากิจกรรม 1.1 - 1.14
+                act_match = re.search(r'1\.(\d{1,2})', content)
+                if act_match:
+                    works.append({
+                        'clean_content': normalize_name(content),
+                        'activity': f"1.{act_match.group(1)}"
+                    })
+        except: continue
+    return works
 
+# --- 5. Main Application ---
 def main():
-    st.title("📋 ระบบเช็คงานครูตระกูล v9.8.3 (Zero Duplicate)")
-    
-    m_files = st.sidebar.file_uploader("📂 1. อัปโหลดรายชื่อ", accept_multiple_files=True)
-    p_files = st.sidebar.file_uploader("📂 2. อัปโหลด Padlet", accept_multiple_files=True)
+    inject_custom_css()
+    st.markdown('<div class="main-header"><h1>📋 ระบบเช็คงานครูตระกูล v9.9.0</h1><p>ยึดชื่อ-นามสกุลเป็นฐานข้อมูลหลักเพื่อความแม่นยำสูงสุด</p></div>', unsafe_allow_html=True)
 
-    if m_files and p_files:
-        levels_db = process_master_files(m_files)
-        pivot_padlet = process_padlet_files(p_files)
+    col1, col2 = st.columns(2)
+    master_files = col1.file_uploader("📂 1. อัปโหลดรายชื่อนักเรียน (ไฟล์ที่ถูกต้อง)", accept_multiple_files=True)
+    padlet_files = col2.file_uploader("📂 2. อัปโหลดไฟล์งานจาก Padlet", accept_multiple_files=True)
+
+    if master_files and padlet_files:
+        # ดึงรายชื่อ Master
+        df_master = process_master_files(master_files)
+        # ดึงงานจาก Padlet
+        works = process_padlet_works(padlet_files)
         
-        full_acts = [f"1.{i}" for i in range(1, 15)]
+        if df_master.empty:
+            st.error("ไม่พบคอลัมน์ 'ชื่อ' ในไฟล์รายชื่อ กรุณาตรวจสอบไฟล์ครับ")
+            return
 
-        for level in sorted(levels_db.keys()):
-            st.header(f"ระดับชั้น {level}")
-            
-            for room_name, df_student in levels_db[level].items():
-                # สกัดเลขห้องจากชื่อไฟล์รายชื่อ (เช่น "ม.3-1" -> "31")
-                target_room = "".join(re.findall(r'\d+', room_name))
+        # สร้างตารางกิจกรรม 1.1 - 1.14 รอไว้
+        activities = [f"1.{i}" for i in range(1, 15)]
+        for act in activities:
+            df_master[act] = 0
+
+        # 🚀 อัลกอริทึมการ Match งาน: วนลูปเช็คชื่อนักเรียนในเนื้อหา Padlet
+        for work in works:
+            # ค้นหาว่า Key ชื่อของนักเรียนคนไหน อยู่ในเนื้อหา Padlet บ้าง
+            mask = df_master['key'].apply(lambda k: k in work['clean_content'] if k else False)
+            df_master.loc[mask, work['activity']] = 1
+
+        # แสดงผลแยกตามห้อง
+        rooms = sorted(df_master['room'].unique())
+        for room in rooms:
+            with st.container():
+                st.markdown(f'<div class="room-section"><h3>🏫 ห้อง: {room}</h3></div>', unsafe_allow_html=True)
+                room_data = df_master[df_master['room'] == room].copy()
+                room_data['รวม'] = room_data[activities].sum(axis=1)
                 
-                # กรองงานจาก Padlet เฉพาะห้องนี้
-                df_work = pivot_padlet[pivot_padlet['รหัสห้อง'] == target_room].copy()
+                # แสดงผลตาราง
+                display_cols = ['no', 'display_name'] + activities + ['รวม']
+                st.dataframe(
+                    room_data[display_cols].rename(columns={'no': 'เลขที่', 'display_name': 'ชื่อ-นามสกุล'}),
+                    use_container_width=True, hide_index=True
+                )
                 
-                # ✅ รวมข้อมูล: รายชื่อนักเรียน (ตั้งต้น) + งานที่ส่ง
-                # join ด้วย 'เลขที่' อย่างเดียว ชื่อจะไม่มีทางซ้ำ
-                final_df = df_student.merge(df_work.drop(columns=['รหัสห้อง'], errors='ignore'), 
-                                          on='เลขที่', how='left').fillna(0)
-                
-                # ล้างซ้ำรอบสุดท้ายเพื่อความชัวร์
-                final_df = final_df.drop_duplicates(subset=['เลขที่'])
-                
-                for a in full_acts:
-                    if a not in final_df.columns: final_df[a] = 0
-                
-                final_df['รวม'] = final_df[full_acts].sum(axis=1)
-                
-                st.subheader(f"🏫 ห้อง {room_name}")
-                st.dataframe(final_df[['เลขที่', 'ชื่อ - นามสกุล'] + full_acts + ['รวม']], use_container_width=True, hide_index=True)
-                
-                # ปุ่มโหลด
-                csv = final_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(f"📥 โหลดไฟล์ {room_name}", csv, f"{room_name}.csv", "text/csv")
+                # ปุ่มโหลดรายห้อง
+                buf = BytesIO()
+                room_data[display_cols].to_excel(buf, index=False)
+                st.download_button(f"📥 โหลด Excel {room}", buf.getvalue(), f"Report_{room}.xlsx")
+    else:
+        st.info("💡 วิธีใช้: อัปโหลดรายชื่อนักเรียนแยกตามห้อง และไฟล์ Padlet ระบบจะจับคู่ชื่อนักเรียนให้เองอัตโนมัติครับ")
 
 if __name__ == "__main__":
     main()
