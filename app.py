@@ -3,20 +3,30 @@ import pandas as pd
 import re
 from io import BytesIO
 
-# --- 1. ตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="ระบบครูตระกูล v9.9.5", layout="wide")
+# --- 1. ตั้งค่าหน้าจอ (ขยายพื้นที่ให้กว้างที่สุด) ---
+st.set_page_config(page_title="ระบบครูตระกูล v9.9.6", layout="wide")
+
+def inject_custom_css():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
+        html, body, [class*="css"] { font-family: 'Sarabun', sans-serif; }
+        /* ขยายตารางให้เต็มพื้นที่และปรับแต่ง Header */
+        .main-header { background: linear-gradient(90deg, #1b5e20, #4caf50); padding: 20px; border-radius: 10px; text-align: center; color: white; margin-bottom: 20px; }
+        .stDataFrame { width: 100% !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
 def normalize_name(text):
-    """ฟอกชื่อให้สะอาดเพื่อใช้ Match: ตัดช่องว่างและคำนำหน้า"""
     if not text or pd.isna(text): return ""
     t = str(text).replace(" ", "").replace("\xa0", "")
     t = re.sub(r'(เด็กชาย|เด็กหญิง|นาย|นางสาว|ด\.ช\.|ด\.ญ\.|น\.ส\.|นาง|ชื่อ|นามสกุล|:|：)', '', t)
-    return t
+    return t.strip()
 
-# --- 2. ฟังก์ชันประมวลผล (Core Logic) ---
+# --- 2. ฟังก์ชันประมวลผลข้อมูล ---
 
 def process_final_sync(m_files, p_files):
-    # 1. สร้างฐานข้อมูลจากไฟล์รายชื่อฝ่ายทะเบียน (Master)
+    # 1. สร้างฐานข้อมูลจากไฟล์ทะเบียน (Master)
     master_db = []
     for f in m_files:
         try:
@@ -26,7 +36,7 @@ def process_final_sync(m_files, p_files):
             
             if c_name:
                 room_label = f.name.split('.')[0]
-                room_id = "".join(re.findall(r'\d+', room_label)) # รหัสห้องจริง
+                room_id = "".join(re.findall(r'\d+', room_label))
                 for _, row in df.iterrows():
                     master_db.append({
                         'name_key': normalize_name(row[c_name]),
@@ -59,20 +69,18 @@ def process_final_sync(m_files, p_files):
                     })
         except: continue
 
-    # 3. เตรียมคอลัมน์กิจกรรม 1.1 - 1.14
+    # 3. เตรียมคอลัมน์กิจกรรม
     acts = [f"1.{i}" for i in range(1, 15)]
     for a in acts: df_final[a] = 0
 
-    # 4. 🔥 การอ้างอิงกลับ (Reference Matching): ตรวจสอบความถูกต้องรายคน
+    # 4. Matching & Referencing
     for work in padlet_works:
         for idx, student in df_final.iterrows():
             if student['name_key'] != "" and student['name_key'] in work['content_key']:
-                # ตรวจสอบว่าเลขที่หรือห้องที่พิมพ์มา ตรงกับไฟล์ทะเบียนไหม
                 is_wrong = False
                 if work['sid_typed'] and work['sid_typed'] != student['เลขที่_จริง']: is_wrong = True
                 if work['room_typed'] and student['room_id_จริง'] not in work['room_typed']: is_wrong = True
                 
-                # บันทึกสถานะ (1=ตรง, 2=ข้อมูลแฝงผิดแต่ชื่อตรง)
                 current = df_final.at[idx, work['act']]
                 if is_wrong:
                     if current == 0: df_final.at[idx, work['act']] = 2
@@ -84,18 +92,19 @@ def process_final_sync(m_files, p_files):
 # --- 3. ส่วนแสดงผล ---
 
 def main():
-    st.markdown("### 📋 ระบบครูตระกูล v9.9.5 (Final Master Sync)")
-    st.write("อ้างอิงเลขที่และห้องจากไฟล์ทะเบียนโรงเรียนเป็นหลัก")
+    inject_custom_css()
+    st.markdown('<div class="main-header"><h3>📋 ระบบสรุปผลการส่งงานครูตระกูล v9.9.6</h3></div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    m_files = col1.file_uploader("📂 1. อัปโหลดรายชื่อฝ่ายทะเบียน (Master)", accept_multiple_files=True)
-    p_files = col2.file_uploader("📂 2. อัปโหลดไฟล์งานจาก Padlet", accept_multiple_files=True)
+    with st.sidebar:
+        st.header("📂 อัปโหลดไฟล์")
+        m_files = st.file_uploader("1. รายชื่อฝ่ายทะเบียน (Master)", accept_multiple_files=True)
+        p_files = st.file_uploader("2. ไฟล์งานจาก Padlet", accept_multiple_files=True)
 
     if m_files and p_files:
         df_res, acts = process_final_sync(m_files, p_files)
         
         for room in sorted(df_res['ห้อง_จริง'].unique()):
-            st.info(f"🏫 บัญชีรายชื่อห้อง: {room}")
+            st.subheader(f"🏫 ห้อง: {room}")
             room_df = df_res[df_res['ห้อง_จริง'] == room].copy()
             room_df['สรุปส่ง'] = room_df[acts].apply(lambda x: (x > 0).sum(), axis=1)
             
@@ -104,18 +113,21 @@ def main():
             for a in acts:
                 display_df[a] = display_df[a].map({1: "✅", 2: "⚠️", 0: "-"})
             
+            # --- ขยายพื้นที่ตารางสรุป ---
+            # กำหนด height ให้สูงพอสำหรับนักเรียนประมาณ 40-50 คนต่อห้อง
             st.dataframe(
                 display_df[['เลขที่_จริง', 'ชื่อ_ทะเบียน'] + acts + ['สรุปส่ง']]
                 .rename(columns={'เลขที่_จริง': 'เลขที่', 'ชื่อ_ทะเบียน': 'ชื่อ-นามสกุล'}),
-                use_container_width=True, hide_index=True
+                use_container_width=True, 
+                hide_index=True,
+                height=1200  # ขยายความสูงของพื้นที่ตารางลงไปด้านล่าง
             )
             
-            # ปุ่ม Export
             buf = BytesIO()
             room_df.to_excel(buf, index=False)
-            st.download_button(f"📥 โหลด Excel {room}", buf.getvalue(), f"Official_Report_{room}.xlsx")
+            st.download_button(f"📥 ดาวน์โหลดไฟล์ Excel ห้อง {room}", buf.getvalue(), f"Report_{room}.xlsx")
     else:
-        st.info("กรุณาอัปโหลดไฟล์รายชื่อและไฟล์งานเพื่อเริ่มกระบวนการตรวจสอบ")
+        st.info("💡 คำแนะนำ: ระบบจะยึดชื่อ-นามสกุลจากไฟล์ทะเบียนเป็นหลัก และรวมงานจาก Padlet มาสรุปให้ในบรรทัดเดียวกันครับ")
 
 if __name__ == "__main__":
     main()
